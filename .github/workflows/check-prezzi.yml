@@ -1,0 +1,76 @@
+name: Controllo prezzi (cron)
+
+# ---------------------------------------------------------------------------
+# ATTENZIONE: questa è l'unica modalità con cui GitHub può "far girare" il bot.
+#
+#   * Esegue UN SOLO giro di controllo prezzi e poi si spegne.
+#   * Manda le notifiche 📉 / 📈 su Telegram.
+#   * NON risponde ai comandi (lista, cancella, azzera...): per quelli serve un
+#     processo sempre acceso (vedi DEPLOY.md).
+#   * Il database viene conservato nella cache di GitHub Actions: se la cache
+#     scade (7 giorni senza accessi) la lista dei prodotti riparte da zero.
+#
+# Prima di attivarlo devi creare il segreto TELEGRAM_BOT_TOKEN:
+#   GitHub → repo → Settings → Secrets and variables → Actions
+#          → New repository secret → Name: TELEGRAM_BOT_TOKEN
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    # Ogni ora, al minuto 17 (GitHub sconsiglia i minuti tondi: sono congestionati).
+    # Nota: le esecuzioni pianificate possono partire con 10-30 minuti di ritardo.
+    - cron: "17 * * * *"
+  workflow_dispatch:  # permette di lanciarlo a mano dal tab Actions
+
+# Niente esecuzioni sovrapposte: se il giro precedente è ancora in corso, aspetta.
+concurrency:
+  group: controllo-prezzi
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  controllo:
+    name: Controllo prezzi
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout del codice
+        uses: actions/checkout@v4
+
+      - name: Installa Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installa le dipendenze
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # La chiave cambia a ogni esecuzione e restore-keys recupera l'ultima
+      # disponibile: è così che il database sopravvive fra un run e l'altro.
+      - name: Ripristina il database dei tracciamenti
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: db-tracciamenti-${{ github.run_id }}
+          restore-keys: db-tracciamenti-
+
+      - name: Esegui il controllo prezzi
+        env:
+          # I segreti si leggono da qui: non sono mai scritti nel repository.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          DATABASE_PATH: data/nonnabot.db
+          EBAY_SITE: www.ebay.it
+          CHECK_INTERVAL_MINUTES: "60"
+          REQUEST_DELAY_SECONDS: "5"
+          LOG_LEVEL: INFO
+        run: |
+          mkdir -p data
+          python main.py --check-once
