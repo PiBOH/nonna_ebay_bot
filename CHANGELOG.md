@@ -9,10 +9,34 @@ Le versioni `0.x.y` sono di sviluppo: l'API e i comandi possono cambiare senza p
 
 ## [Unreleased]
 
+### Aggiunto
+- Modalità `python main.py --check-once`: esegue un solo giro di controllo prezzi
+  e termina, per gli ambienti che non ospitano un processo residente
+  (cron di GitHub Actions, scheduled task, crontab).
+- Argomenti da riga di comando `--check-once`, `--version` e `--help`.
+- Gestione pulita degli errori in modalità one-shot: token rifiutato o Telegram
+  irraggiungibile producono un messaggio di log e `exit 1` invece di un traceback.
+- Workflow GitHub Actions `tests.yml`: esegue i test su Python 3.10/3.11/3.12 a
+  ogni push, senza bisogno di segreti.
+- Workflow GitHub Actions `check-prezzi.yml`: controllo prezzi orario con i
+  segreti letti da GitHub Secrets e database conservato nella cache.
+- `render.yaml`: blueprint Render con worker, disco persistente e segreti
+  marcati `sync: false` (il valore lo chiede la dashboard, non sta nel repo).
+- `deploy/`: unit systemd `mianonnabot.service` e modello `/etc/mianonnabot.env`
+  per l'installazione su VPS.
+- `DEPLOY.md`: guida a dove mettere token e chiavi per ogni piattaforma, con i
+  limiti reali dei piani gratuiti.
+
+### Modificato
+- Documentazione di installazione corretta: i **Background Worker di Render non
+  hanno piano gratuito** e il piano gratuito di **PythonAnywhere** non basta
+  (niente always-on task e allowlist in uscita che non comprende eBay).
+
 ### Da fare
 - [ ] Notifiche opzionali solo al ribasso (impostazione per chat).
 - [ ] Supporto a più siti eBay nello stesso comando (es. ebay.de, ebay.com).
 - [ ] Comando per impostare un prezzo obiettivo con avviso dedicato.
+- [ ] Persistenza del database fuori da SQLite per la modalità GitHub Actions.
 
 ## [0.0.1] - 2026-08-28
 

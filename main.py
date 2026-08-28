@@ -42,13 +42,16 @@ Opzionali:
 
 Avvio
 -----
-    python main.py
+    python main.py                 # processo residente: comandi + controllo prezzi
+    python main.py --check-once    # un solo giro di controllo, poi esce (cron / Actions)
+    python main.py --version       # stampa la versione
 
 Copyright (C) 2026 — rilasciato con licenza GNU AGPL v3 (vedi LICENSE).
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
@@ -60,6 +63,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from types import SimpleNamespace
 from typing import Any, Iterable, Optional, Sequence
 
 import requests
@@ -67,7 +71,7 @@ from bs4 import BeautifulSoup
 
 from telegram import Update
 from telegram.constants import ChatAction
-from telegram.error import Forbidden, NetworkError, RetryAfter, TelegramError
+from telegram.error import Forbidden, InvalidToken, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -1399,8 +1403,48 @@ def build_application(token: str) -> Application:
     return application
 
 
-def main() -> int:
+async def run_check_once() -> int:
+    """Esegue un solo giro di controllo prezzi e termina.
+
+    Serve per gli ambienti che non ospitano un processo residente: cron di GitHub
+    Actions, scheduled task di PythonAnywhere, crontab su VPS. In questa modalità
+    il bot *invia* le notifiche di variazione ma non risponde ai comandi.
+    """
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    inizializzata = False
+    try:
+        # initialize() chiama get_me(): se il token è sbagliato si ferma subito
+        # con un errore chiaro invece di girare a vuoto.
+        await application.initialize()
+        inizializzata = True
+        await check_prices_job(SimpleNamespace(bot=application.bot))
+    finally:
+        if inizializzata:  # chiudiamo il client HTTP solo se è stato aperto
+            await application.shutdown()
+    return 0
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    """Legge la riga di comando."""
+    parser = argparse.ArgumentParser(
+        prog="mianonnabot",
+        description="Bot Telegram che tiene d'occhio i prezzi su eBay.",
+    )
+    parser.add_argument(
+        "--check-once",
+        action="store_true",
+        help="esegue un solo controllo prezzi e termina (per cron/Actions/scheduled task)",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"{BOT_NAME} {__version__}"
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
     """Entry point del bot."""
+    args = parse_args(argv)
+
     if not TELEGRAM_BOT_TOKEN:
         logger.error(
             "Manca TELEGRAM_BOT_TOKEN: imposta la variabile d'ambiente col token di @BotFather."
@@ -1416,6 +1460,17 @@ def main() -> int:
         "attive" if USE_BROWSE_API else "non configurate (scraping)",
         CHECK_INTERVAL_MINUTES,
     )
+
+    if args.check_once:
+        logger.info("Modalità --check-once: un solo giro di controllo e poi esco")
+        try:
+            return asyncio.run(run_check_once())
+        except InvalidToken:
+            logger.error("Token Telegram rifiutato dal server: controlla TELEGRAM_BOT_TOKEN.")
+            return 1
+        except TelegramError as exc:
+            logger.error("Impossibile contattare Telegram: %s", exc)
+            return 1
 
     application = build_application(TELEGRAM_BOT_TOKEN)
     # ALL_TYPES è necessario per ricevere anche i post dei canali.

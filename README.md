@@ -103,26 +103,58 @@ escluse dai controlli successivi.
 
 ## Messa online
 
-### Render (consigliato, gratis)
+> **GitHub conserva il codice, non lo esegue.** Il bot deve restare acceso 24/7
+> per ricevere i tuoi messaggi, quindi i parametri (token e chiavi) vanno messi
+> **dove il bot gira**, mai nei file del repository.
+> Guida completa, con pro e contro di ogni opzione: **[DEPLOY.md](DEPLOY.md)**.
 
-1. Nuovo **Background Worker** collegato al repository.
-2. Runtime *Python 3*, build `pip install -r requirements.txt`, start `python main.py`.
-3. Variabile d'ambiente `TELEGRAM_BOT_TOKEN`.
-4. **Importante**: il disco dei piani gratuiti è effimero. Per non perdere i
-   tracciamenti a ogni deploy monta un *Disk* (es. `/data`) e imposta
-   `DATABASE_PATH=/data/mianonnabot.db`.
+| Opzione | Costo | Comandi interattivi | Note |
+| --- | --- | --- | --- |
+| **GitHub Actions** (cron) | gratis | ❌ solo notifiche | il database vive nella cache, scade dopo 7 giorni |
+| **Render** Background Worker | 7 $/mese + disco | ✅ | i worker **non** hanno piano gratuito |
+| **PythonAnywhere** Developer | 10 $/mese | ✅ | il piano gratuito non basta (vedi sotto) |
+| **VPS** (es. Oracle Cloud Always Free) | gratis | ✅ | serve un po' di configurazione (file in `deploy/`) |
+
+### GitHub (solo codice + segreti)
+
+1. Push del codice.
+2. `Settings → Secrets and variables → Actions → New repository secret`:
+   aggiungi `TELEGRAM_BOT_TOKEN` (e, se le hai, `EBAY_CLIENT_ID` /
+   `EBAY_CLIENT_SECRET`).
+3. Il workflow [`tests.yml`](.github/workflows/tests.yml) esegue i test a ogni
+   push — **non serve nessun segreto**.
+4. Il workflow [`check-prezzi.yml`](.github/workflows/check-prezzi.yml) controlla
+   i prezzi ogni ora con `python main.py --check-once`: mandi le notifiche ma il
+   bot non risponde ai comandi.
+
+### Render
+
+Il repo include [`render.yaml`](render.yaml) (New → **Blueprint**): servizio,
+disco e variabili si configurano da soli, e i segreti marcati `sync: false` te
+li chiede la dashboard invece di stare nel file. A mano: *New → Background
+Worker*, build `pip install -r requirements.txt`, start `python main.py`,
+variabile `TELEGRAM_BOT_TOKEN`, **Disk** montato in `/data` con
+`DATABASE_PATH=/data/mianonnabot.db`.
 
 ### PythonAnywhere
 
-1. Carica i file, apri una console Bash e installa: `pip install -r requirements.txt --user`.
-2. Esporta il token: `export TELEGRAM_BOT_TOKEN=...`
-3. Avvia da una **Always-on task** (non da una console temporanea):
-   `python /home/TUOUSER/nonna_ebay_bot/main.py`.
-4. Su PythonAnywhere il disco è persistente, quindi il default `mianonnabot.db`
-   va bene; mettilo comunque in una cartella che non sia `/tmp`.
+Il piano gratuito (Beginner) **non funziona** per questo bot: niente always-on
+task e accesso in uscita limitato a una allowlist dove **ebay.it non compare**.
+Col piano Developer: crea `~/mianonnabot/.env` col token (`chmod 600`), poi
+**Tasks → Always-on task** con
+`/home/TUOUSER/mianonnabot/.venv/bin/python /home/TUOUSER/mianonnabot/main.py`.
 
-> Su entrambi i servizi serve **un solo processo**: il worker di controllo
-> prezzi è già dentro il bot (job queue), non va avviato a parte.
+### VPS con systemd
+
+```bash
+sudo cp deploy/mianonnabot.env.example /etc/mianonnabot.env   # poi compilalo
+sudo chmod 600 /etc/mianonnabot.env
+sudo cp deploy/mianonnabot.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now mianonnabot
+```
+
+> Su tutti i servizi serve **un solo processo**: il controllo prezzi è già
+> dentro il bot (job queue), non va avviato a parte.
 
 ---
 
@@ -142,11 +174,22 @@ worker e l'handler Telegram con `Update` reali. Non servono rete né token.
 ## Struttura
 
 ```
-main.py            tutto il bot (comandi, database, worker, estrazione dati)
-CHANGELOG.md       registro delle modifiche (formato Keep a Changelog)
-requirements.txt   dipendenze
-tests/test_bot.py  test automatici
-.env.example       modello di configurazione
+main.py                        tutto il bot (comandi, database, worker, dati eBay)
+CHANGELOG.md                   registro delle modifiche (Keep a Changelog)
+DEPLOY.md                      dove mettere token e chiavi, piattaforma per piattaforma
+requirements.txt               dipendenze
+render.yaml                    blueprint Render (worker + disco + variabili)
+tests/test_bot.py              test automatici
+.env.example                   modello di configurazione per il locale
+.github/workflows/             CI dei test + cron di controllo prezzi
+deploy/                        unit systemd e modello .env per VPS
+```
+
+### Due modalità di esecuzione
+
+```bash
+python main.py                 # processo residente: comandi + controllo prezzi
+python main.py --check-once    # un solo giro di controllo, poi esce (cron/Actions)
 ```
 
 ### Database

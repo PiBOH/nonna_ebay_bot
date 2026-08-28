@@ -751,3 +751,175 @@ def test_handler_non_bloccante(monkeypatch):
     # PTB traduce concurrent_updates(True) nel numero massimo di update paralleli.
     assert app.concurrent_updates
     assert int(app.concurrent_updates) > 1
+
+
+# ---------------------------------------------------------------------------
+# Riga di comando e modalità --check-once (cron / GitHub Actions)
+# ---------------------------------------------------------------------------
+
+def test_parse_args():
+    assert main.parse_args([]).check_once is False
+    assert main.parse_args(["--check-once"]).check_once is True
+
+
+def test_main_senza_token_esce_con_errore(monkeypatch):
+    monkeypatch.setattr(main, "TELEGRAM_BOT_TOKEN", "")
+    assert main.main([]) == 1
+
+
+def test_main_check_once_passa_dalla_cli(monkeypatch):
+    """`python main.py --check-once` arriva davvero a run_check_once."""
+    chiamato = {}
+
+    async def fake_check_once():
+        chiamato["ok"] = True
+        return 0
+
+    monkeypatch.setattr(main, "TELEGRAM_BOT_TOKEN", "123456:token-di-prova")
+    monkeypatch.setattr(main, "run_check_once", fake_check_once)
+    assert main.main(["--check-once"]) == 0
+    assert chiamato.get("ok") is True
+
+
+class _FakeApp:
+    """Sostituto di ``telegram.ext.Application``: registra il ciclo di vita."""
+
+    def __init__(self, bot) -> None:
+        self.bot = bot
+        self.inizializzata = False
+        self.spenta = False
+
+    async def initialize(self) -> None:
+        self.inizializzata = True
+
+    async def shutdown(self) -> None:
+        self.spenta = True
+
+
+class _FakeBotExt:
+    """Sostituto di ``telegram.Bot``: registra i messaggi invece di inviarli."""
+
+    def __init__(self) -> None:
+        self.inviati: list[str] = []
+
+    async def send_message(self, chat_id, text, **kwargs):
+        self.inviati.append(text)
+
+
+def _installa_builder_finto(monkeypatch, bot=None):
+    """Sostituisce ApplicationBuilder con una versione che non tocca la rete."""
+    bot = bot or _FakeBotExt()
+    stato = {}
+
+    class _Builder:
+        def token(self, valore):
+            stato["token"] = valore
+            return self
+
+        def build(self):
+            app = _FakeApp(bot)
+            stato["app"] = app
+            return app
+
+    monkeypatch.setattr(main, "ApplicationBuilder", _Builder)
+    return stato
+
+
+def test_check_once_esegue_il_giro_e_chiude_tutto(monkeypatch):
+    """run_check_once inizializza Telegram, controlla i prezzi e fa shutdown."""
+    main.add_item(42, "111111111111", 100.0, "Oggetto fermo", "https://www.ebay.it/itm/111111111111")
+    monkeypatch.setattr(main, "TELEGRAM_BOT_TOKEN", "123456:token-di-prova")
+    monkeypatch.setattr(main, "REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        main,
+        "get_ebay_info",
+        lambda item_id: main.EbayInfo(
+            item_id=item_id, title="Oggetto fermo", price=100.0,
+            currency="EUR", url="https://www.ebay.it/itm/111111111111",
+        ),
+    )
+    stato = _installa_builder_finto(monkeypatch)
+
+    # Prezzo invariato: nessuna notifica, ma il giro deve passare sul database.
+    assert run(main.run_check_once()) == 0
+
+    assert stato["token"] == "123456:token-di-prova"
+    assert stato["app"].inizializzata is True
+    assert stato["app"].spenta is True  # il client HTTP viene chiuso
+
+    item = main.list_items(42)[0]
+    assert item.last_price == 100.0
+    assert item.last_checked is not None
+
+
+def test_check_once_notifica_le_variazioni(monkeypatch):
+    """Anche in modalità one-shot le variazioni arrivano su Telegram."""
+    main.add_item(42, "111111111111", 100.0, "Oggetto", "https://www.ebay.it/itm/111111111111")
+    monkeypatch.setattr(main, "TELEGRAM_BOT_TOKEN", "123456:token-di-prova")
+    monkeypatch.setattr(main, "REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(
+        main,
+        "get_ebay_info",
+        lambda item_id: main.EbayInfo(
+            item_id=item_id, title="Oggetto", price=79.90,
+            currency="EUR", url="https://www.ebay.it/itm/111111111111",
+        ),
+    )
+    bot_finto = _FakeBotExt()
+    _installa_builder_finto(monkeypatch, bot=bot_finto)
+
+    assert run(main.run_check_once()) == 0
+    assert any("📉 Prezzo sceso da €100,00 a €79,90!" in testo for testo in bot_finto.inviati)
+    assert main.list_items(42)[0].last_price == 79.90
+
+
+def test_main_check_once_traduce_gli_errori_telegram(monkeypatch, caplog):
+    """Token sbagliato o Telegram irraggiungibile: exit 1 e messaggio pulito, niente traceback."""
+    from telegram.error import InvalidToken, NetworkError
+
+    monkeypatch.setattr(main, "TELEGRAM_BOT_TOKEN", "123:fake")
+
+    async def token_sbagliato():
+        raise InvalidToken("rifiutato")
+
+    async def rete_assente():
+        raise NetworkError("httpx.ConnectError")
+
+    monkeypatch.setattr(main, "run_check_once", token_sbagliato)
+    with caplog.at_level("ERROR"):
+        assert main.main(["--check-once"]) == 1
+    assert "Token Telegram rifiutato" in caplog.text
+
+    caplog.clear()
+    monkeypatch.setattr(main, "run_check_once", rete_assente)
+    with caplog.at_level("ERROR"):
+        assert main.main(["--check-once"]) == 1
+    assert "Impossibile contattare Telegram" in caplog.text
+
+
+def test_check_once_chiude_tutto_anche_se_initialize_fallisce(monkeypatch):
+    """Token rifiutato: l'errore sale, ma non resta nessun client aperto."""
+    from telegram.error import InvalidToken
+
+    monkeypatch.setattr(main, "TELEGRAM_BOT_TOKEN", "token-sbagliato")
+
+    class _AppRotta(_FakeApp):
+        async def initialize(self) -> None:
+            raise InvalidToken("Il token è stato rifiutato dal server")
+
+    class _Builder:
+        def token(self, valore):
+            return self
+
+        def build(self):
+            app = _AppRotta(_FakeBotExt())
+            stato["app"] = app
+            return app
+
+    stato = {}
+    monkeypatch.setattr(main, "ApplicationBuilder", _Builder)
+
+    with pytest.raises(InvalidToken):
+        run(main.run_check_once())
+    # shutdown() non deve essere chiamato su un'app mai inizializzata.
+    assert stato["app"].spenta is False
