@@ -1,0 +1,50 @@
+name: Keep-alive (HF Space)
+
+# ---------------------------------------------------------------------------
+# Gli Spaces Docker (cpu-basic) si addormentano dopo 48 ore senza visite.
+# Questo workflow fa una GET all'endpoint di salute dello Space ogni 6 ore,
+# così il container resta sveglio e il bot continua a ricevere i messaggi.
+#
+# Prima di attivarlo crea una repository variable (non un segreto: non è
+# sensibile):
+#   Settings → Secrets and variables → Actions → Variables
+#   Name: SPACE_URL   Value: https://TUO-SPAZIO.huggingface.co
+# (la URL dello Space, dopo che ha finito il primo build)
+#
+# NON servono segreti: la pagina di salute del bot non richiede autenticazione.
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    # Ogni 6 ore, al minuto 17 (molto prima delle 48 h di inattività).
+    # Nota: le esecuzioni pianificate possono partire con 10-30 minuti di ritardo.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:  # permette di provarlo a mano dal tab Actions
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  risveglia:
+    name: Risveglia lo Space
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Controlla la variabile SPACE_URL
+        if: vars.SPACE_URL == ''
+        run: |
+          echo "Manca la repository variable SPACE_URL (es. https://TUO-SPAZIO.huggingface.co)."
+          exit 1
+
+      - name: Battiti di mano allo Space
+        # La prima richiesta sveglia il container: può volerci fino a un minuto.
+        run: |
+          echo "Risveglio: ${{ vars.SPACE_URL }}"
+          codice=$(curl -s -o /dev/null -w "%{http_code}" -L --max-time 90 "${{ vars.SPACE_URL }}")
+          echo "Risposta: HTTP $codice"
+          [ "$codice" = "200" ] || { echo "Lo Space non risponde con 200"; exit 1; }
