@@ -1,0 +1,54 @@
+# Blueprint Render — https://render.com/docs/blueprint-spec
+#
+# Su Render: New → Blueprint → collega questo repository.
+# Le variabili con "sync: false" NON hanno un valore nel file: Render te le
+# chiede nella dashboard, così i segreti restano fuori da Git.
+#
+# ⚠️ I Background Worker su Render non hanno piano gratuito (solo Web Service,
+#    Postgres e Key Value ce l'hanno): questa configurazione parte da 7 $/mese.
+#    Vedi DEPLOY.md per le alternative.
+
+services:
+  - type: worker
+    name: nonnabot
+    runtime: python
+    plan: starter          # il piano "free" non esiste per i worker
+    region: frankfurt      # più vicino all'Italia
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    autoDeploy: true
+
+    # Disco persistente: senza questo il database SQLite si azzera a ogni deploy.
+    disk:
+      name: nonnabot-data
+      mountPath: /data
+      sizeGB: 1
+
+    envVars:
+      # Segreti: il valore lo inserisci nella dashboard.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: EBAY_CLIENT_ID
+        sync: false
+      - key: EBAY_CLIENT_SECRET
+        sync: false
+      - key: EPN_CAMPAIGN_ID
+        sync: false
+
+      # Configurazione non sensibile: valore nel file, modificabile dalla dashboard.
+      - key: DATABASE_PATH
+        value: /data/nonnabot.db
+      - key: CHECK_INTERVAL_MINUTES
+        value: "60"
+      - key: EBAY_SITE
+        value: www.ebay.it
+      - key: EBAY_MARKETPLACE_ID
+        value: EBAY_IT
+      - key: MAX_TRACKED_PER_CHAT
+        value: "50"
+      - key: REQUEST_DELAY_SECONDS
+        value: "4"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHON_VERSION
+        value: 3.12.4
