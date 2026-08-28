@@ -1027,3 +1027,150 @@ def test_check_once_chiude_tutto_anche_se_initialize_fallisce(monkeypatch):
         run(main.run_check_once())
     # shutdown() non deve essere chiamato su un'app mai inizializzata.
     assert stato["app"].spenta is False
+
+
+# ---------------------------------------------------------------------------
+# Endpoint di salute, variabili d'ambiente e backup su Hugging Face
+# ---------------------------------------------------------------------------
+
+def test_default_non_butta_i_messaggi_in_attesa(monkeypatch):
+    """Default 0: i messaggi scritti col bot spento vanno recuperati all'avvio."""
+    monkeypatch.delenv("DROP_PENDING_UPDATES", raising=False)
+    import importlib
+
+    importlib.reload(main)
+    assert main.DROP_PENDING_UPDATES is False
+
+
+def test_env_bool(monkeypatch):
+    """_env_bool: verità in italiano e inglese; vuoto o ignoto → default."""
+    for raw in ("1", "true", "vero", "si", "sì", "yes", "on", "ON", "True"):
+        monkeypatch.setenv("PROVA_BOOL", raw)
+        assert main._env_bool("PROVA_BOOL", False) is True
+    for raw in ("0", "false", "falso", "no", "off", "FALSE"):
+        monkeypatch.setenv("PROVA_BOOL", raw)
+        assert main._env_bool("PROVA_BOOL", True) is False
+    for raw in ("", "boh"):
+        monkeypatch.setenv("PROVA_BOOL", raw)
+        assert main._env_bool("PROVA_BOOL", True) is True
+    monkeypatch.delenv("PROVA_BOOL")
+    assert main._env_bool("PROVA_BOOL", False) is False
+
+
+def test_flag_health_endpoint_esiste():
+    """Il flag --with-health-endpoint è presente e disattivo di default."""
+    args = main.parse_args(["--with-health-endpoint"])
+    assert args.with_health_endpoint is True
+    assert main.parse_args([]).with_health_endpoint is False
+
+
+def test_health_endpoint_risponde_veramente():
+    """HTTP reale in loopback (nessuna rete esterna): così lo fa la piattaforma."""
+    import requests
+
+    server = main.avvia_health_server(0)
+    try:
+        porta = server.server_address[1]
+        response = requests.get(f"http://127.0.0.1:{porta}/", timeout=5)
+        assert response.status_code == 200
+        assert response.json() == {"stato": "ok", "bot": "NonnaBot", "versione": "0.0.1"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_hub_disattivato_se_non_configurato(monkeypatch):
+    """Senza repository e token il backup è spento: le funzioni sono no-op."""
+    monkeypatch.setattr(main, "HF_BACKUP_REPO", "")
+    monkeypatch.setattr(main, "HF_TOKEN", "")
+    assert main._hub_attivo() is False
+    main.ripristina_database()  # non devono toccare né il disco né la rete
+    main.salva_database(force=True)
+
+
+def test_ripristina_database_copia_il_file(tmp_path, monkeypatch):
+    """Se il dataset ha un backup, all'avvio sovrascrive il database locale."""
+    remoto = tmp_path / "remote.db"
+    remoto.write_bytes(b"byte-del-backup")
+
+    mod = types.ModuleType("huggingface_hub")
+
+    def hf_hub_download(**kwargs):
+        assert kwargs["repo_type"] == "dataset"
+        assert kwargs["repo_id"] == "utente/nonnabot"
+        return str(remoto)
+
+    mod.hf_hub_download = hf_hub_download
+    monkeypatch.setitem(sys.modules, "huggingface_hub", mod)
+    monkeypatch.setattr(main, "HF_BACKUP_REPO", "utente/nonnabot")
+    monkeypatch.setattr(main, "HF_TOKEN", "hf_test")
+
+    main.ripristina_database()
+    with open(main.DATABASE_PATH, "rb") as handle:
+        assert handle.read() == b"byte-del-backup"
+
+
+def test_ripristina_database_tollera_primo_avvio(monkeypatch):
+    """Primo avvio: il download fallisce (repo vuoto) e il bot parte lo stesso."""
+    mod = types.ModuleType("huggingface_hub")
+
+    def hf_hub_download(**kwargs):
+        raise FileNotFoundError("repo senza file")
+
+    mod.hf_hub_download = hf_hub_download
+    monkeypatch.setitem(sys.modules, "huggingface_hub", mod)
+    monkeypatch.setattr(main, "HF_BACKUP_REPO", "utente/nonnabot")
+    monkeypatch.setattr(main, "HF_TOKEN", "hf_test")
+
+    main.ripristina_database()  # nessuna eccezione
+
+
+def test_salva_database_non_esplode_se_hub_fallisce(monkeypatch, caplog):
+    """Hub irraggiungibile: si logga e si va avanti, si riproverà più tardi."""
+    tentativi = []
+
+    class _HfApi:
+        def __init__(self, token=None) -> None:
+            pass
+
+        def upload_file(self, **kwargs):
+            tentativi.append(kwargs)
+            raise RuntimeError("rete assente")
+
+    mod = types.ModuleType("huggingface_hub")
+    mod.HfApi = _HfApi
+    monkeypatch.setitem(sys.modules, "huggingface_hub", mod)
+    monkeypatch.setattr(main, "HF_BACKUP_REPO", "utente/nonnabot")
+    monkeypatch.setattr(main, "HF_TOKEN", "hf_test")
+
+    with caplog.at_level("WARNING"):
+        main.salva_database(force=True)
+        main.salva_database(force=True)
+    assert len(tentativi) == 2  # il fallimento non blocca i tentativi successivi
+    assert "fallito" in caplog.text.lower()
+
+
+def test_salva_database_su_hub_con_anti_rimbalzo(monkeypatch):
+    """Caricamenti ravvicinati: uno solo, a meno che non si passi in forza."""
+    caricamenti = []
+
+    class _HfApi:
+        def __init__(self, token=None) -> None:
+            pass
+
+        def upload_file(self, **kwargs):
+            caricamenti.append(kwargs)
+
+    mod = types.ModuleType("huggingface_hub")
+    mod.HfApi = _HfApi
+    monkeypatch.setitem(sys.modules, "huggingface_hub", mod)
+    monkeypatch.setattr(main, "HF_BACKUP_REPO", "utente/nonnabot")
+    monkeypatch.setattr(main, "HF_TOKEN", "hf_test")
+    monkeypatch.setattr(main, "BACKUP_INTERVAL_SECONDS", 300)
+
+    main.salva_database(force=True)  # va a buon fine
+    main.salva_database()            # subito dopo: anti-rimbalzo, saltato
+    main.salva_database(force=True)  # con la forza: va a buon fine
+    assert len(caricamenti) == 2
+    assert caricamenti[0]["repo_type"] == "dataset"
+    assert caricamenti[0]["repo_id"] == "utente/nonnabot"

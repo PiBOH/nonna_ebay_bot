@@ -13,5 +13,9 @@ beautifulsoup4>=4.12,<5.0
 # Caricamento del file .env in sviluppo locale (opzionale su Render/PythonAnywhere).
 python-dotenv>=1.0,<2.0
 
+# Salvataggio del database su un repo dataset di Hugging Face:
+# indispensabile su Hugging Face Spaces, dove il disco è effimero.
+huggingface_hub>=0.24,<1.0
+
 # --- solo per eseguire i test (non necessarie in produzione) ---
 # pytest>=8.0,<9.0

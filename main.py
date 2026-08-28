@@ -60,8 +60,10 @@ import logging
 import os
 import random
 import re
+import shutil
 import sqlite3
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -134,6 +136,26 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+_VALORI_VERI = {"1", "true", "vero", "si", "sì", "yes", "on"}
+_VALORI_FALSI = {"0", "false", "falso", "no", "off"}
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Legge una variabile d'ambiente booleana (accetta anche «vero» e «sì»).
+
+    Vuoto o valore incomprensibile → ``default``.
+    """
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in _VALORI_VERI:
+        return True
+    if raw in _VALORI_FALSI:
+        return False
+    logging.warning("Variabile %s=%r non è booleana: uso il default %s", name, raw, default)
+    return default
+
+
 TELEGRAM_BOT_TOKEN: str = (
     os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("BOT_TOKEN") or ""
 ).strip()
@@ -154,6 +176,22 @@ EPN_TOOL_ID: str = os.environ.get("EPN_TOOL_ID", "10001").strip() or "10001"
 MAX_TRACKED_PER_CHAT: int = max(1, _env_int("MAX_TRACKED_PER_CHAT", 50))
 HTTP_TIMEOUT: float = _env_float("HTTP_TIMEOUT", 25.0)
 REQUEST_DELAY_SECONDS: float = _env_float("REQUEST_DELAY_SECONDS", 4.0)
+
+#: 0 = recupera i messaggi arrivati col bot spento (consigliato); 1 = li butta.
+DROP_PENDING_UPDATES: bool = _env_bool("DROP_PENDING_UPDATES", False)
+
+#: Porta dell'endpoint di salute (su Hugging Face Spaces deve essere 7860).
+PORT: int = _env_int("PORT", 7860)
+
+# Backup del database su un dataset di Hugging Face: dove il disco è effimero
+# (Hugging Face Spaces) senza di esso la lista si azzera a ogni riavvio.
+HF_BACKUP_REPO: str = os.environ.get("HF_BACKUP_REPO", "").strip()
+HF_TOKEN: str = os.environ.get("HF_TOKEN", "").strip()
+HF_BACKUP_FILENAME: str = (
+    os.environ.get("HF_BACKUP_FILENAME", "nonnabot.db").strip() or "nonnabot.db"
+)
+BACKUP_INTERVAL_SECONDS: int = max(30, _env_int("BACKUP_INTERVAL_SECONDS", 300))
+
 MAX_MESSAGE_LENGTH: int = 3900  # Telegram accetta 4096 caratteri: ci teniamo un margine.
 
 # Le API ufficiali sono usate solo se sono presenti entrambe le credenziali.
@@ -1232,6 +1270,9 @@ async def action_add(context: ContextTypes.DEFAULT_TYPE, chat_id: int, item_id: 
     await asyncio.to_thread(
         add_item, chat_id, info.item_id, info.price, info.title, url, info.currency
     )
+    # Su disco effimero (Hugging Face) il nuovo oggetto deve finire subito nel
+    # backup: se no si perde a ogni riavvio. No-op se il backup non è attivo.
+    await asyncio.to_thread(salva_database, True)
     index = await asyncio.to_thread(count_items, chat_id)
 
     note = "\n⚠️ L'inserzione risulta conclusa: il prezzo non cambierà più." if info.ended else ""
@@ -1353,6 +1394,11 @@ async def check_prices_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             changes += 1
             await send_text(context, item.chat_id, notification)
 
+    if changes:
+        # Variazioni già scritte nel database locale: le rispecchio nel backup
+        # del dataset Hub se configurato (no-op se non lo è).
+        await asyncio.to_thread(salva_database, True)
+
     logger.info(
         "Controllo prezzi completato: %d variazioni, %d oggetti non raggiungibili",
         changes,
@@ -1409,6 +1455,116 @@ def build_application(token: str) -> Application:
     return application
 
 
+def avvia_health_server(port: Optional[int] = None):
+    """Apre l'endpoint di salute HTTP su 0.0.0.0 (Hugging Face, Render, ecc.).
+
+    La piattaforma fa una GET periodica a questa porta per capire se il
+    container è vivo: su Hugging Face Spaces senza questa porta lo Space
+    verrebbe considerato morto e spento. Il server gira in un thread demone,
+    quindi non tiene vivo il processo. Ritorna il server (per spegnerlo nei
+    test con ``server.shutdown()``).
+    """
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - firma imposta dalla classe
+            corpo = json.dumps(
+                {"stato": "ok", "bot": BOT_NAME, "versione": __version__},
+                ensure_ascii=False,
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(corpo)))
+            self.end_headers()
+            self.wfile.write(corpo)
+
+        def log_message(self, *args: object) -> None:  # il traffico lo logga PTB
+            pass
+
+    server = ThreadingHTTPServer(("0.0.0.0", port if port is not None else PORT), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    logger.info("Endpoint di salute in ascolto su 0.0.0.0:%s", server.server_address[1])
+    return server
+
+
+# ---------------------------------------------------------------------------
+# Backup del database su Hugging Face (per i dischi effimeri, es. HF Spaces)
+# ---------------------------------------------------------------------------
+
+def _hub_attivo() -> bool:
+    """Il backup sul Hub si usa solo con repository e token entrambi impostati."""
+    return bool(HF_BACKUP_REPO and HF_TOKEN)
+
+
+def ripristina_database() -> None:
+    """All'avvio riporta il backup del dataset Hub sul database locale.
+
+    Al primo avvio (o con il Hub irraggiungibile) non c'è ancora nulla da
+    recuperare: in quel caso il bot parte con una lista vuota, senza errori.
+    """
+    if not _hub_attivo():
+        return
+    try:
+        # huggingface_hub si importa qui (dentro la funzione) perché in molti
+        # ambienti (GitHub Actions, cron) il backup non è usato e l'import
+        # all'avvio sarebbe tempo sprecato.
+        from huggingface_hub import hf_hub_download
+
+        remoto = hf_hub_download(
+            repo_id=HF_BACKUP_REPO,
+            filename=HF_BACKUP_FILENAME,
+            repo_type="dataset",
+            token=HF_TOKEN,
+        )
+    except Exception as exc:  # noqa: BLE001 - primo avvio o Hub irraggiungibile
+        logger.info("Nessun backup recuperato dal dataset %s: %s", HF_BACKUP_REPO, exc)
+        return
+    try:
+        shutil.copyfile(remoto, DATABASE_PATH)
+        logger.info(
+            "Database ripristinato dal backup %s/%s", HF_BACKUP_REPO, HF_BACKUP_FILENAME
+        )
+    except OSError as exc:
+        logger.warning("Impossibile copiare il backup su %s: %s", DATABASE_PATH, exc)
+
+
+#: Ultimo caricamento riuscito sul Hub: l'anti-rimbalzo evita i doppi upload.
+_ultimo_backup: dict[str, float] = {"istante": 0.0}
+
+
+def salva_database(force: bool = False) -> None:
+    """Carica il database locale sul dataset Hub (``repo_type="dataset"``).
+
+    Senza ``force`` il caricamento viene saltato se l'ultimo è avvenuto meno di
+    ``BACKUP_INTERVAL_SECONDS`` fa (anti-rimbalzo: un'azione rapida seguita da
+    un'altra non raddoppia i caricamenti). I fallimenti vengono solo loggati:
+    il backup non deve mai bloccare né far cadere il bot.
+    """
+    if not _hub_attivo():
+        return
+    now = time.time()
+    if not force and now - _ultimo_backup["istante"] < BACKUP_INTERVAL_SECONDS:
+        logger.debug(
+            "Backup Hub saltato (anti-rimbalzo: %d secondi fa)",
+            int(now - _ultimo_backup["istante"]),
+        )
+        return
+    try:
+        from huggingface_hub import HfApi
+
+        HfApi(token=HF_TOKEN).upload_file(
+            path_or_fileobj=DATABASE_PATH,
+            path_in_repo=HF_BACKUP_FILENAME,
+            repo_id=HF_BACKUP_REPO,
+            repo_type="dataset",
+        )
+    except Exception as exc:  # noqa: BLE001 - il bot va avanti anche senza backup
+        logger.warning("Backup sul dataset Hub fallito: %s", exc)
+        return
+    _ultimo_backup["istante"] = now
+    logger.info("Database salvato sul dataset %s", HF_BACKUP_REPO)
+
+
 async def run_check_once() -> int:
     """Esegue un solo giro di controllo prezzi e termina.
 
@@ -1445,6 +1601,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--check-once",
         action="store_true",
         help="esegue un solo controllo prezzi e termina (per cron/Actions/scheduled task)",
+    )
+    parser.add_argument(
+        "--with-health-endpoint",
+        action="store_true",
+        help="apre anche l'endpoint HTTP di salute su 0.0.0.0 (Hugging Face, Render)",
     )
     parser.add_argument(
         "--add",
@@ -1529,6 +1690,7 @@ def cli_add(link_o_id: str, chat_id: Optional[int]) -> int:
         return 1
 
     add_item(chat_id, info.item_id, info.price, info.title, info.url, info.currency)
+    salva_database(True)  # no-op se il backup Hub non è configurato
     index = count_items(chat_id)
     print(f"✅ Aggiunto come numero {index}: {info.title}")
     print(f"   Prezzo attuale: {format_price(info.price, info.currency)}")
@@ -1579,6 +1741,7 @@ def cli_list(chat_id: Optional[int]) -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Entry point del bot."""
     args = parse_args(argv)
+    ripristina_database()  # riporta il backup Hub sul disco, se c'è
     init_db()
 
     # Comandi "one-shot" da riga di comando: non serve il token Telegram.
@@ -1616,9 +1779,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             logger.error("Impossibile contattare Telegram: %s", exc)
             return 1
 
+    if args.with_health_endpoint:
+        # Le piattaforme (Hugging Face, Render) tengono vivo il servizio solo
+        # se la porta di salute risponde: si apre PRIMA del worker così i log
+        # di avvio restano nell'ordine documentato.
+        avvia_health_server()
     application = build_application(TELEGRAM_BOT_TOKEN)
-    # ALL_TYPES è necessario per ricevere anche i post dei canali.
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    # ALL_TYPES è necessario per ricevere anche i post dei canali;
+    # drop_pending_updates segue l'impostazione (default: recupera la coda).
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=DROP_PENDING_UPDATES,
+    )
     return 0
 
 
