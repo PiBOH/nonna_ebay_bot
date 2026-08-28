@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MiaNonnaBot — bot Telegram per il monitoraggio dei prezzi su eBay.
+NonnaBot — bot Telegram per il monitoraggio dei prezzi su eBay.
 
 L'utente incolla il link di un'inserzione eBay: il bot ne estrae titolo e prezzo,
 lo mette sotto controllo e avvisa in chat ogni volta che il prezzo cambia
@@ -26,7 +26,9 @@ Obbligatoria:
     TELEGRAM_BOT_TOKEN      Token fornito da @BotFather (accettato anche BOT_TOKEN).
 
 Opzionali:
-    DATABASE_PATH           Percorso del file SQLite (default: ``mianonnabot.db``).
+    TELEGRAM_CHAT_ID        Chat di destinazione per gli oggetti aggiunti da riga
+                            di comando (GitHub Actions, cron).
+    DATABASE_PATH           Percorso del file SQLite (default: ``nonnabot.db``).
     CHECK_INTERVAL_MINUTES  Ogni quanti minuti ricontrollare i prezzi (default: 60).
     EBAY_SITE               Sito eBay usato per i link (default: ``www.ebay.it``).
     EBAY_CLIENT_ID          Client ID app eBay (abilita le API Browse ufficiali).
@@ -97,7 +99,7 @@ except ImportError:  # pragma: no cover
 #: Versione del bot, secondo lo standard Semantic Versioning (https://semver.org).
 __version__ = "0.0.1"
 
-BOT_NAME = "MiaNonnaBot"
+BOT_NAME = "NonnaBot"
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "nonna_ebay_bot")
 
 #: Nome del file di changelog distribuito insieme al bot.
@@ -136,7 +138,11 @@ TELEGRAM_BOT_TOKEN: str = (
     os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("BOT_TOKEN") or ""
 ).strip()
 
-DATABASE_PATH: str = os.environ.get("DATABASE_PATH", "mianonnabot.db").strip() or "mianonnabot.db"
+#: Chat a cui associare gli oggetti aggiunti da riga di comando (GitHub Actions,
+#: cron). Nei comandi interattivi la chat è invece quella da cui scrivi.
+TELEGRAM_CHAT_ID: int = _env_int("TELEGRAM_CHAT_ID", 0)
+
+DATABASE_PATH: str = os.environ.get("DATABASE_PATH", "nonnabot.db").strip() or "nonnabot.db"
 CHECK_INTERVAL_MINUTES: int = max(5, _env_int("CHECK_INTERVAL_MINUTES", 60))
 EBAY_SITE: str = os.environ.get("EBAY_SITE", "www.ebay.it").strip() or "www.ebay.it"
 EBAY_CLIENT_ID: str = os.environ.get("EBAY_CLIENT_ID", "").strip()
@@ -158,7 +164,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=getattr(logging, LOG_LEVEL, logging.INFO),
 )
-logger = logging.getLogger("mianonnabot")
+logger = logging.getLogger("nonnabot")
 
 # User-Agent realistico: riduce (non elimina) la probabilità di essere bloccati.
 HTTP_HEADERS: dict[str, str] = {
@@ -939,7 +945,7 @@ def parse_message(text: str) -> Parsed:
 
     body = raw[1:].strip() if raw.startswith("/") else raw
 
-    # Rimuove l'eventuale menzione al bot: /lista@MiaNonnaBot -> "lista".
+    # Rimuove l'eventuale menzione al bot: /lista@NonnaBot -> "lista".
     first, _, rest = body.partition(" ")
     if "@" in first:
         first = first.split("@", 1)[0]
@@ -1427,8 +1433,13 @@ async def run_check_once() -> int:
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     """Legge la riga di comando."""
     parser = argparse.ArgumentParser(
-        prog="mianonnabot",
+        prog="nonnabot",
         description="Bot Telegram che tiene d'occhio i prezzi su eBay.",
+        epilog=(
+            "Senza argomenti il bot resta in ascolto (comandi + controllo prezzi). "
+            "Le opzioni --add/--list/--remove servono dove non puoi tenere un "
+            "processo sempre acceso, ad esempio nei cron di GitHub Actions."
+        ),
     )
     parser.add_argument(
         "--check-once",
@@ -1436,14 +1447,148 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="esegue un solo controllo prezzi e termina (per cron/Actions/scheduled task)",
     )
     parser.add_argument(
+        "--add",
+        metavar="LINK_O_ID",
+        help="aggiunge un oggetto al tracciamento (link eBay o ID oggetto)",
+    )
+    parser.add_argument(
+        "--remove",
+        metavar="NUM",
+        type=int,
+        help="rimuove l'oggetto con quel numero dalla lista della chat",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="stampa l'elenco degli oggetti tracciati ed esce",
+    )
+    parser.add_argument(
+        "--chat-id",
+        metavar="ID",
+        type=int,
+        help=f"chat Telegram di riferimento (default: TELEGRAM_CHAT_ID={TELEGRAM_CHAT_ID or 'non impostata'})",
+    )
+    parser.add_argument(
         "--version", action="version", version=f"{BOT_NAME} {__version__}"
     )
     return parser.parse_args(argv)
 
 
+# ---------------------------------------------------------------------------
+# Comandi da riga di comando (per GitHub Actions, cron, script)
+# ---------------------------------------------------------------------------
+
+def _errore_chat_mancante() -> None:
+    """Spiega all'operatore come indicare la chat di destinazione."""
+    print(
+        "ERRORE: serve una chat Telegram di destinazione.\n"
+        "  · imposta la variabile TELEGRAM_CHAT_ID, oppure\n"
+        "  · passa --chat-id <numero>.\n"
+        "Il tuo numero di chat te lo dice @userinfobot su Telegram.",
+        file=sys.stderr,
+    )
+
+
+def _chat_id_riferimento(args: argparse.Namespace) -> Optional[int]:
+    """Ricava la chat di riferimento: --chat-id vince su TELEGRAM_CHAT_ID."""
+    if args.chat_id:
+        return int(args.chat_id)
+    return int(TELEGRAM_CHAT_ID) if TELEGRAM_CHAT_ID else None
+
+
+def cli_add(link_o_id: str, chat_id: Optional[int]) -> int:
+    """Aggiunge un oggetto da riga di comando (nessuna chiamata a Telegram)."""
+    if chat_id is None:
+        _errore_chat_mancante()
+        return 2
+
+    item_id = extract_item_id(link_o_id)
+    if not item_id:
+        print(f"ERRORE: non trovo un ID oggetto eBay in {link_o_id!r}.", file=sys.stderr)
+        return 2
+
+    gia_presente = find_by_item_id(chat_id, item_id)
+    if gia_presente is not None:
+        print(f"Oggetto già presente al numero {gia_presente.index}: {gia_presente.title}")
+        return 0
+
+    if count_items(chat_id) >= MAX_TRACKED_PER_CHAT:
+        print(
+            f"ERRORE: raggiunto il limite di {MAX_TRACKED_PER_CHAT} oggetti per chat.",
+            file=sys.stderr,
+        )
+        return 2
+
+    info = get_ebay_info(item_id)
+    if info is None or info.price is None:
+        print(
+            f"ERRORE: non riesco a leggere il prezzo dell'oggetto {item_id}. "
+            "Verifica il link o riprova più tardi.",
+            file=sys.stderr,
+        )
+        return 1
+
+    add_item(chat_id, info.item_id, info.price, info.title, info.url, info.currency)
+    index = count_items(chat_id)
+    print(f"✅ Aggiunto come numero {index}: {info.title}")
+    print(f"   Prezzo attuale: {format_price(info.price, info.currency)}")
+    print(f"   Link: {info.url}")
+    return 0
+
+
+def cli_remove(numero: int, chat_id: Optional[int]) -> int:
+    """Rimuove un oggetto da riga di comando."""
+    if chat_id is None:
+        _errore_chat_mancante()
+        return 2
+    rimosso = delete_item(chat_id, numero)
+    if rimosso is None:
+        totale = count_items(chat_id)
+        print(
+            f"ERRORE: il numero {numero} non esiste (hai {totale} oggetti in lista).",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"🗑️ Rimosso: {rimosso.title}")
+    return 0
+
+
+def cli_list(chat_id: Optional[int]) -> int:
+    """Stampa la lista degli oggetti tracciati."""
+    if chat_id is not None:
+        items = list_items(chat_id)
+        print(format_list(items))
+        return 0
+
+    with connect_db() as conn:
+        chat_ids = [
+            int(row["chat_id"])
+            for row in conn.execute(
+                "SELECT DISTINCT chat_id FROM tracciamenti ORDER BY chat_id"
+            )
+        ]
+    if not chat_ids:
+        print("Nessun oggetto tracciato in nessuna chat.")
+        return 0
+    for cid in chat_ids:
+        print(f"--- chat {cid} ---")
+        print(format_list(list_items(cid)))
+    return 0
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Entry point del bot."""
     args = parse_args(argv)
+    init_db()
+
+    # Comandi "one-shot" da riga di comando: non serve il token Telegram.
+    chat_id = _chat_id_riferimento(args)
+    if args.list:
+        return cli_list(chat_id)
+    if args.add:
+        return cli_add(args.add, chat_id)
+    if args.remove is not None:
+        return cli_remove(args.remove, chat_id)
 
     if not TELEGRAM_BOT_TOKEN:
         logger.error(
@@ -1451,7 +1596,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 1
 
-    init_db()
     logger.info(
         "%s v%s avviato — sito %s, API Browse %s, intervallo %d min",
         BOT_NAME,

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Test automatici di MiaNonnaBot.
+Test automatici di NonnaBot.
 
 Esegui con:  pytest -q
 (oppure:     python -m pytest tests/ -q)
@@ -98,7 +98,7 @@ def run(coro):
         ("/h", main.Action.HELP, None),
         ("H", main.Action.HELP, None),
         ("/start", main.Action.HELP, None),
-        ("/aiuto@MiaNonnaBot", main.Action.HELP, None),
+        ("/aiuto@NonnaBot", main.Action.HELP, None),
         # lista
         ("lista", main.Action.LIST, None),
         ("LISTA", main.Action.LIST, None),
@@ -471,7 +471,12 @@ def test_changelog_estratto_dal_file_reale():
     assert "📒 Changelog" in text
     assert "[Unreleased]" in text
     assert "[0.0.1] - 2026-08-28" in text
-    assert len(text) <= main.MAX_MESSAGE_LENGTH
+    # Il changelog cresce a ogni release e supera il limite di 4096 caratteri di
+    # Telegram: il messaggio viene spezzato senza perdere contenuto.
+    chunks = main.split_message(text)
+    assert all(len(chunk) <= main.MAX_MESSAGE_LENGTH for chunk in chunks)
+    assert chunks[0].startswith("📒 Changelog NonnaBot")
+    assert any("[0.0.1] - 2026-08-28" in chunk for chunk in chunks)
 
 
 def test_changelog_assente():
@@ -581,8 +586,10 @@ def test_cancella_e_azzera(context):
 
 def test_changelog_da_telegram(context):
     run(main.route_message(make_update("/changelog"), context))
-    assert "📒 Changelog MiaNonnaBot" in context.bot.last_text
-    assert "0.0.1" in context.bot.last_text
+    # Più messaggi: il primo porta l'intestazione, gli ultimi il resto.
+    assert context.bot.messages[0][1].startswith("📒 Changelog NonnaBot")
+    assert "0.0.1" in context.bot.all_text
+    assert all(len(testo) <= main.MAX_MESSAGE_LENGTH for _, testo in context.bot.messages)
 
 
 def test_messaggio_sconosciuto(context):
@@ -721,7 +728,7 @@ def test_handler_reale_con_update_telegram(monkeypatch):
     assert "Apple iPhone 13 - 128GB - Blu (Sbloccato)" in inviati
     assert "🗑️ Ho smesso di controllare" in inviati                  # cancella 1
     assert "Nessun oggetto sotto controllo" in inviati                # l (lista vuota)
-    assert "📒 Changelog MiaNonnaBot" in inviati                      # /changelog
+    assert "📒 Changelog NonnaBot" in inviati                      # /changelog
     # L'azione "sto scrivendo..." viene mostrata durante il recupero del prezzo.
     assert (42, "typing") in context.bot.actions
 
@@ -895,6 +902,103 @@ def test_main_check_once_traduce_gli_errori_telegram(monkeypatch, caplog):
     with caplog.at_level("ERROR"):
         assert main.main(["--check-once"]) == 1
     assert "Impossibile contattare Telegram" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Comandi da riga di comando (--add / --list / --remove) per GitHub Actions
+# ---------------------------------------------------------------------------
+
+def _info_finta(item_id="405399021732", price=500.0, title="Apple iPhone 13 - 128GB - Bianco"):
+    return main.EbayInfo(
+        item_id=item_id, title=title, price=price, currency="EUR",
+        url=f"https://www.ebay.it/itm/{item_id}",
+    )
+
+
+def test_cli_add_lista_remove(monkeypatch, capsys):
+    monkeypatch.setattr(main, "get_ebay_info", lambda item_id: _info_finta())
+
+    assert main.cli_add("https://www.ebay.it/itm/405399021732?hash=x", 42) == 0
+    out = capsys.readouterr().out
+    assert "✅ Aggiunto come numero 1" in out
+    assert "Prezzo attuale: €500,00" in out
+    assert main.count_items(42) == 1
+
+    assert main.cli_list(42) == 0
+    assert "1. Apple iPhone 13 - 128GB - Bianco - €500,00" in capsys.readouterr().out
+
+    assert main.cli_remove(1, 42) == 0
+    assert "🗑️ Rimosso" in capsys.readouterr().out
+    assert main.count_items(42) == 0
+
+
+def test_cli_list_tutte_le_chat(capsys):
+    main.add_item(42, "111111111111", 10.0, "Oggetto di 42", "u")
+    main.add_item(99, "222222222222", 20.0, "Oggetto di 99", "u")
+    assert main.cli_list(None) == 0
+    out = capsys.readouterr().out
+    assert "--- chat 42 ---" in out
+    assert "--- chat 99 ---" in out
+    assert "Oggetto di 42" in out and "Oggetto di 99" in out
+
+
+def test_cli_add_gli_errori(monkeypatch, capsys):
+    monkeypatch.setattr(main, "TELEGRAM_CHAT_ID", 0)
+
+    # ID non riconoscibile
+    assert main.cli_add("ciao, come va?", 42) == 2
+    assert "non trovo un ID oggetto eBay" in capsys.readouterr().err
+
+    # Manca la chat di destinazione
+    assert main.cli_add("405399021732", None) == 2
+    err = capsys.readouterr().err
+    assert "TELEGRAM_CHAT_ID" in err and "@userinfobot" in err
+
+    # eBay non risponde
+    monkeypatch.setattr(main, "get_ebay_info", lambda item_id: None)
+    assert main.cli_add("405399021732", 42) == 1
+    assert "non riesco a leggere il prezzo" in capsys.readouterr().err
+
+
+def test_cli_add_duplicato_e_limite(monkeypatch, capsys):
+    monkeypatch.setattr(main, "get_ebay_info", lambda item_id: _info_finta())
+    assert main.cli_add("405399021732", 42) == 0
+    capsys.readouterr()
+
+    assert main.cli_add("405399021732", 42) == 0
+    assert "già presente al numero 1" in capsys.readouterr().out
+    assert main.count_items(42) == 1
+
+    monkeypatch.setattr(main, "MAX_TRACKED_PER_CHAT", 1)
+    assert main.cli_add("167017705623", 42) == 2
+    assert "limite di 1 oggetti" in capsys.readouterr().err
+
+
+def test_cli_remove_inesistente(capsys):
+    main.add_item(42, "111111111111", 10.0, "Oggetto", "u")
+    assert main.cli_remove(7, 42) == 1
+    assert "il numero 7 non esiste (hai 1 oggetti" in capsys.readouterr().err
+
+
+def test_main_gestisce_le_opzioni_cli(monkeypatch, capsys):
+    """--list funziona anche senza token Telegram."""
+    monkeypatch.setattr(main, "TELEGRAM_BOT_TOKEN", "")
+    main.add_item(42, "111111111111", 10.0, "Oggetto di 42", "u")
+
+    assert main.main(["--list", "--chat-id", "42"]) == 0
+    assert "1. Oggetto di 42 - €10,00" in capsys.readouterr().out
+
+    assert main.main([]) == 1  # senza token, e senza opzioni, non può partire
+
+
+def test_chat_id_da_variabile_ambiente(monkeypatch, capsys):
+    """TELEGRAM_CHAT_ID fa da default quando manca --chat-id."""
+    monkeypatch.setattr(main, "TELEGRAM_CHAT_ID", 777)
+    args = main.parse_args(["--add", "405399021732"])
+    assert main._chat_id_riferimento(args) == 777
+
+    args = main.parse_args(["--add", "405399021732", "--chat-id", "42"])
+    assert main._chat_id_riferimento(args) == 42  # --chat-id vince
 
 
 def test_check_once_chiude_tutto_anche_se_initialize_fallisce(monkeypatch):

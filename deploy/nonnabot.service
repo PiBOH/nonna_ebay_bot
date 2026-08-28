@@ -1,20 +1,20 @@
 [Unit]
-Description=MiaNonnaBot - tracciamento prezzi eBay su Telegram
+Description=NonnaBot - tracciamento prezzi eBay su Telegram
 Documentation=https://github.com/PiBOH/nonna_ebay_bot
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=mianonnabot
-Group=mianonnabot
-WorkingDirectory=/opt/mianonnabot
+User=nonnabot
+Group=nonnabot
+WorkingDirectory=/opt/nonnabot
 
 # I segreti (token, chiavi eBay) stanno in questo file, fuori dal repository.
 # Permessi consigliati: 600, proprietario root.
-EnvironmentFile=/etc/mianonnabot.env
+EnvironmentFile=/etc/nonnabot.env
 
-ExecStart=/opt/mianonnabot/.venv/bin/python /opt/mianonnabot/main.py
+ExecStart=/opt/nonnabot/.venv/bin/python /opt/nonnabot/main.py
 
 # Se il bot cade (rete, riavvio, errore) systemd lo fa ripartire da solo.
 Restart=always
@@ -24,11 +24,11 @@ RestartSec=15
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/opt/mianonnabot
+ReadWritePaths=/opt/nonnabot
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=mianonnabot
+SyslogIdentifier=nonnabot
 
 [Install]
 WantedBy=multi-user.target

@@ -36,32 +36,79 @@ vuoto**: lo copi, lo compili sul server e `.gitignore` lo tiene fuori da Git.
 
 ---
 
-## Opzione A — Solo GitHub (gratis, con limiti)
+## Se non vuoi spendere nulla (e non hai carta di credito)
+
+**Risposta breve: GitHub Actions (Opzione A), e quando vorrai i comandi
+interattivi il tuo PC o un Raspberry Pi.**
+
+Ho verificato lo stato dei piani gratuiti ad agosto 2026:
+
+| Piattaforma | Gratis? | Carta? | Va bene per NonnaBot? |
+| --- | --- | --- | --- |
+| **GitHub Actions** | ✅ | ❌ non serve | ✅ **sì**, ma solo notifiche + lista manuale |
+| **Il tuo PC / Raspberry Pi** | ✅ | ❌ | ✅ sì, bot completo (deve restare acceso) |
+| Hugging Face Spaces | ✅ | ❌ | ⚠️ sì con accorgimenti: si addormenta dopo 48 h e il disco non è persistente |
+| Koyeb | ✅ | ⚠️ "di solito no" | ⚠️ l'istanza free non fa da worker e va a zero senza traffico |
+| PythonAnywhere (Beginner) | ✅ | ❌ | ❌ no always-on task e allowlist senza eBay |
+| Render | ⚠️ solo web service | ✅ richiesta | ❌ i worker sono a pagamento |
+| Fly.io | ❌ solo trial ~2 ore | ✅ richiesta | ❌ |
+| Oracle Cloud Always Free | ✅ | ✅ richiesta | ❌ senza carta non ti registri |
+
+Fonti: [Render — piani gratuiti](https://render.com/docs/free) ("Other service
+types don't support Free instances"), [PythonAnywhere — piani](https://www.pythonanywhere.com/pricing/)
+e [allowlist](https://www.pythonanywhere.com/whitelist/), [Hugging Face —
+gestione Spaces](https://huggingface.co/docs/huggingface_hub/en/guides/manage-spaces)
+("cpu-basic … automatically be paused after 48h of inactivity").
+
+### Cosa ottieni con GitHub Actions (Opzione A)
+
+* ✅ Ricevi le notifiche 📉/📈 ogni ora.
+* ✅ Aggiungi e togli oggetti dal sito di GitHub, col pulsante **Run workflow**.
+* ✅ Zero costi, zero carta, zero server da mantenere.
+* ❌ Il bot **non risponde** quando gli scrivi su Telegram: per quello serve un
+  processo sempre acceso (Opzione D sul tuo PC, o più avanti uno Space).
+
+---
+
+## Opzione A — Solo GitHub (gratis, senza carta) ⭐ consigliata per te
 
 GitHub non tiene acceso un processo, ma può **svegliarsi a orari fissi** con
-GitHub Actions. In questa modalità ricevi le **notifiche di variazione prezzo**,
-ma il bot **non risponde ai comandi** (`lista`, `cancella`, `azzera`…).
+GitHub Actions. Sono già pronti tre workflow (in `deploy/github/`, da copiare in
+`.github/workflows/` come spiegato in [`deploy/github/README.md`](deploy/github/README.md)):
 
-1. **Crea il segreto**
-   `GitHub → il tuo repo → Settings → Secrets and variables → Actions →
-   New repository secret`
-   * Name: `TELEGRAM_BOT_TOKEN` — Secret: *(il token di @BotFather)*
-   * Facoltativi, stessi passaggi: `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`.
-2. **Verifica** in `Actions → Controllo prezzi (cron)` che il workflow esista
-   (è già nel repo: [`.github/workflows/check-prezzi.yml`](.github/workflows/check-prezzi.yml)).
-3. Premi **Run workflow** per provarlo subito.
-4. Da lì in poi parte da solo ogni ora (`cron: "17 * * * *"`).
+| Workflow | Cosa fa | Quando parte |
+| --- | --- | --- |
+| `tests.yml` | esegue i test | a ogni push |
+| `gestisci-lista.yml` | aggiunge / elenca / rimuove oggetti | quando premi **Run workflow** |
+| `check-prezzi.yml` | controlla i prezzi e notifica | ogni ora |
+
+**Configurazione, una tantum**
+
+1. `Settings → Secrets and variables → Actions → Secrets → New repository secret`
+   * Name `TELEGRAM_BOT_TOKEN` — Secret: il token di @BotFather
+   * facoltativi: `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`
+2. Tab **Variables** → `New repository variable`
+   * Name `TELEGRAM_CHAT_ID` — Value: il tuo numero di chat.
+     Per scoprirlo scrivi a [@userinfobot](https://t.me/userinfobot) su Telegram.
+3. `Actions → Gestisci lista (manuale) → Run workflow →` scegli `aggiungi` e
+   incolla il link eBay.
+
+**Uso quotidiano**
+
+* aggiungere: `Run workflow → aggiungi → <link eBay>`
+* vedere la lista: `Run workflow → lista` (l'elenco finisce nel log del run)
+* togliere: `Run workflow → rimuovi → <numero>`
 
 **Limiti da conoscere**
 
-* Niente comandi interattivi: serve un processo residente (opzioni B/C/D).
-* Il database vive nella cache di Actions, che scade dopo **7 giorni** senza
-  accessi: se succede, la lista dei prodotti riparte da zero.
+* Il database vive nella **cache** di Actions, che scade dopo **7 giorni** senza
+  accessi: con il cron orario resta viva, ma se disattivi il workflow perdi la lista.
 * I cron di GitHub partono spesso con **10-30 minuti di ritardo** e vengono
-  **disabilitati dopo 60 giorni** di inattività del repository.
-* Su repo privati hai **2.000 minuti/mese** inclusi (uno pubblico è illimitato).
+  **disabilitati dopo 60 giorni** di inattività del repository (basta un commit
+  per riattivarli).
+* Repo pubblico = minuti illimitati; repo privato = 2.000 minuti/mese.
 * L'IP dei runner è condiviso: eBay può rispondere con un blocco. Con le chiavi
-  API (`EBAY_CLIENT_ID`/`SECRET`) il problema sparisce.
+  API il problema sparisce.
 
 ---
 
@@ -78,7 +125,7 @@ non va bene.
 2. `dashboard.render.com → New → Background Worker →` collega il repo.
 3. Build `pip install -r requirements.txt` — Start `python main.py`.
 4. **Environment** → aggiungi `TELEGRAM_BOT_TOKEN` (e le eventuali chiavi eBay).
-5. **Disk** → mount path `/data`, 1 GB → poi `DATABASE_PATH=/data/mianonnabot.db`.
+5. **Disk** → mount path `/data`, 1 GB → poi `DATABASE_PATH=/data/nonnabot.db`.
 
 Il repo contiene [`render.yaml`](render.yaml): su Render puoi usare
 **New → Blueprint** e il servizio si configura da solo; i valori marcati
@@ -100,41 +147,61 @@ restrizioni). Lì i parametri si mettono così:
 
 ```bash
 # 1. crea il file dei segreti (NON è nel repository)
-nano ~/mianonnabot/.env
+nano ~/nonnabot/.env
 #    TELEGRAM_BOT_TOKEN=123456789:AAAA...
-chmod 600 ~/mianonnabot/.env      # leggibile solo da te
+chmod 600 ~/nonnabot/.env      # leggibile solo da te
 ```
 
 Poi in **Tasks → Always-on task**:
 
 ```
-/home/TUOUSER/mianonnabot/.venv/bin/python /home/TUOUSER/mianonnabot/main.py
+/home/TUOUSER/nonnabot/.venv/bin/python /home/TUOUSER/nonnabot/main.py
 ```
 
 Il bot carica `.env` da solo (usa `python-dotenv`).
 
 ---
 
-## Opzione D — VPS (anche gratis: Oracle Cloud Always Free)
+## Opzione D — Il tuo PC, un Raspberry Pi o un VPS (gratis, bot completo)
 
-Un piccolo server Linux tiene acceso il bot senza costi e senza limiti di rete.
-Nel repo trovi [`deploy/`](deploy/): copia i due file e sistema i percorsi.
+È l'unico modo **a costo zero e senza carta** per avere il bot completo, comandi
+compresi: il processo sta acceso su una macchina tua. Un vecchio PC o un
+Raspberry Pi vanno benissimo (il bot usa pochi MB di RAM).
+
+### Sul tuo PC (il modo più semplice)
 
 ```bash
-sudo useradd --system --create-home --home-dir /opt/mianonnabot mianonnabot
-sudo git clone https://github.com/PiBOH/nonna_ebay_bot /opt/mianonnabot
-cd /opt/mianonnabot && sudo -u mianonnabot python3 -m venv .venv
-sudo -u mianonnabot .venv/bin/pip install -r requirements.txt
+git clone https://github.com/PiBOH/nonna_ebay_bot.git
+cd nonna_ebay_bot
+python3 -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env && nano .env                  # incolla il token
+python main.py
+```
+
+Finché quella finestra è aperta il bot funziona: risponde ai comandi **e**
+controlla i prezzi ogni ora.
+
+### Su un VPS Linux (o un Raspberry Pi sempre acceso)
+
+Qui il bot parte da solo a ogni riavvio grazie a systemd. Nel repo trovi
+[`deploy/`](deploy/): copia i due file e sistema i percorsi.
+
+```bash
+sudo useradd --system --create-home --home-dir /opt/nonnabot nonnabot
+sudo git clone https://github.com/PiBOH/nonna_ebay_bot /opt/nonnabot
+cd /opt/nonnabot && sudo -u nonnabot python3 -m venv .venv
+sudo -u nonnabot .venv/bin/pip install -r requirements.txt
 
 # i segreti stanno qui, fuori dal repository, permessi 600
-sudo cp deploy/mianonnabot.env.example /etc/mianonnabot.env
-sudo nano /etc/mianonnabot.env     # incolla il token
-sudo chmod 600 /etc/mianonnabot.env && sudo chown root:root /etc/mianonnabot.env
+sudo cp deploy/nonnabot.env.example /etc/nonnabot.env
+sudo nano /etc/nonnabot.env      # incolla il token
+sudo chmod 600 /etc/nonnabot.env && sudo chown root:root /etc/nonnabot.env
 
-sudo cp deploy/mianonnabot.service /etc/systemd/system/
+sudo cp deploy/nonnabot.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now mianonnabot
-journalctl -u mianonnabot -f       # guarda i log
+sudo systemctl enable --now nonnabot
+journalctl -u nonnabot -f        # guarda i log
 ```
 
 ---

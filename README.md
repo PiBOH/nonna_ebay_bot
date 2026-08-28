@@ -1,4 +1,4 @@
-# MiaNonnaBot 👵📦
+# NonnaBot 👵📦
 
 Bot Telegram che tiene d'occhio i prezzi su **eBay** per te: incolli il link di
 un'inserzione e il bot ti avvisa ogni volta che il prezzo cambia, in ribasso 📉
@@ -71,7 +71,7 @@ Tutto si configura con variabili d'ambiente (in locale puoi copiare
 | Variabile | Default | Descrizione |
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | — *(obbligatoria)* | Token di @BotFather (accettato anche `BOT_TOKEN`) |
-| `DATABASE_PATH` | `mianonnabot.db` | Percorso del file SQLite |
+| `DATABASE_PATH` | `nonnabot.db` | Percorso del file SQLite |
 | `CHECK_INTERVAL_MINUTES` | `60` | Ogni quanti minuti ricontrollare i prezzi (minimo 5) |
 | `EBAY_SITE` | `www.ebay.it` | Sito usato per i link |
 | `EBAY_CLIENT_ID` | — | Client ID app eBay: se presente si usano le API ufficiali |
@@ -108,24 +108,30 @@ escluse dai controlli successivi.
 > **dove il bot gira**, mai nei file del repository.
 > Guida completa, con pro e contro di ogni opzione: **[DEPLOY.md](DEPLOY.md)**.
 
-| Opzione | Costo | Comandi interattivi | Note |
-| --- | --- | --- | --- |
-| **GitHub Actions** (cron) | gratis | ❌ solo notifiche | il database vive nella cache, scade dopo 7 giorni |
-| **Render** Background Worker | 7 $/mese + disco | ✅ | i worker **non** hanno piano gratuito |
-| **PythonAnywhere** Developer | 10 $/mese | ✅ | il piano gratuito non basta (vedi sotto) |
-| **VPS** (es. Oracle Cloud Always Free) | gratis | ✅ | serve un po' di configurazione (file in `deploy/`) |
+| Opzione | Costo | Carta? | Comandi interattivi | Note |
+| --- | --- | --- | --- | --- |
+| **GitHub Actions** ⭐ | gratis | ❌ | ❌ solo notifiche | la lista si gestisce col pulsante *Run workflow* |
+| **Il tuo PC / Raspberry Pi** | gratis | ❌ | ✅ | il bot completo, ma la macchina deve restare accesa |
+| Hugging Face Space | gratis | ❌ | ✅ | si addormenta dopo 48 h, disco non persistente |
+| **Render** Background Worker | 7 $/mese | ✅ | ✅ | i worker **non** hanno piano gratuito |
+| **PythonAnywhere** Developer | 10 $/mese | ✅ | ✅ | il piano gratuito non basta (vedi sotto) |
 
-### GitHub (solo codice + segreti)
+> **Senza soldi e senza carta:** GitHub Actions per le notifiche, oppure il tuo
+> PC/Raspberry Pi per il bot completo. Oracle Cloud e Fly.io chiedono la carta
+> anche per i piani gratuiti.
 
-1. Push del codice.
-2. `Settings → Secrets and variables → Actions → New repository secret`:
-   aggiungi `TELEGRAM_BOT_TOKEN` (e, se le hai, `EBAY_CLIENT_ID` /
-   `EBAY_CLIENT_SECRET`).
-3. Il workflow [`tests.yml`](.github/workflows/tests.yml) esegue i test a ogni
-   push — **non serve nessun segreto**.
-4. Il workflow [`check-prezzi.yml`](.github/workflows/check-prezzi.yml) controlla
-   i prezzi ogni ora con `python main.py --check-once`: mandi le notifiche ma il
-   bot non risponde ai comandi.
+### GitHub (consigliato se parti da zero)
+
+1. `Settings → Secrets and variables → Actions`:
+   * **Secrets**: `TELEGRAM_BOT_TOKEN` (facoltativi `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`)
+   * **Variables**: `TELEGRAM_CHAT_ID` (te lo dice [@userinfobot](https://t.me/userinfobot))
+2. Copia i workflow da `deploy/github/` in `.github/workflows/`
+   (istruzioni in [`deploy/github/README.md`](deploy/github/README.md)).
+3. `Actions → Gestisci lista (manuale) → Run workflow → aggiungi → <link eBay>`.
+
+Tre workflow: `tests.yml` (test a ogni push, senza segreti),
+`gestisci-lista.yml` (aggiungi/lista/rimuovi a mano), `check-prezzi.yml`
+(controllo prezzi ogni ora con `python main.py --check-once`).
 
 ### Render
 
@@ -134,23 +140,23 @@ disco e variabili si configurano da soli, e i segreti marcati `sync: false` te
 li chiede la dashboard invece di stare nel file. A mano: *New → Background
 Worker*, build `pip install -r requirements.txt`, start `python main.py`,
 variabile `TELEGRAM_BOT_TOKEN`, **Disk** montato in `/data` con
-`DATABASE_PATH=/data/mianonnabot.db`.
+`DATABASE_PATH=/data/nonnabot.db`.
 
 ### PythonAnywhere
 
 Il piano gratuito (Beginner) **non funziona** per questo bot: niente always-on
 task e accesso in uscita limitato a una allowlist dove **ebay.it non compare**.
-Col piano Developer: crea `~/mianonnabot/.env` col token (`chmod 600`), poi
+Col piano Developer: crea `~/nonnabot/.env` col token (`chmod 600`), poi
 **Tasks → Always-on task** con
-`/home/TUOUSER/mianonnabot/.venv/bin/python /home/TUOUSER/mianonnabot/main.py`.
+`/home/TUOUSER/nonnabot/.venv/bin/python /home/TUOUSER/nonnabot/main.py`.
 
 ### VPS con systemd
 
 ```bash
-sudo cp deploy/mianonnabot.env.example /etc/mianonnabot.env   # poi compilalo
-sudo chmod 600 /etc/mianonnabot.env
-sudo cp deploy/mianonnabot.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now mianonnabot
+sudo cp deploy/nonnabot.env.example /etc/nonnabot.env   # poi compilalo
+sudo chmod 600 /etc/nonnabot.env
+sudo cp deploy/nonnabot.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now nonnabot
 ```
 
 > Su tutti i servizi serve **un solo processo**: il controllo prezzi è già

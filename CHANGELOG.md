@@ -1,6 +1,6 @@
 # Changelog
 
-Tutte le modifiche rilevanti a **MiaNonnaBot** sono documentate in questo file.
+Tutte le modifiche rilevanti a **NonnaBot** sono documentate in questo file.
 
 Il formato segue [Keep a Changelog](https://keepachangelog.com/it/1.1.0/)
 e il progetto aderisce al [Semantic Versioning](https://semver.org/lang/it/).
@@ -10,6 +10,14 @@ Le versioni `0.x.y` sono di sviluppo: l'API e i comandi possono cambiare senza p
 ## [Unreleased]
 
 ### Aggiunto
+- Comandi da riga di comando `--add <link>`, `--list`, `--remove <num>` e
+  `--chat-id`: permettono di gestire la lista anche dove non si può tenere un
+  processo sempre acceso (GitHub Actions, cron, script).
+- Variabile `TELEGRAM_CHAT_ID`: chat di destinazione per gli oggetti aggiunti da
+  riga di comando.
+- Workflow GitHub Actions `gestisci-lista.yml`: aggiungi/elenco/rimuovi dal sito
+  di GitHub con *Run workflow*, senza segreti nello script (i valori viaggiano
+  come variabili d'ambiente).
 - Modalità `python main.py --check-once`: esegue un solo giro di controllo prezzi
   e termina, per gli ambienti che non ospitano un processo residente
   (cron di GitHub Actions, scheduled task, crontab).
@@ -22,12 +30,15 @@ Le versioni `0.x.y` sono di sviluppo: l'API e i comandi possono cambiare senza p
   segreti letti da GitHub Secrets e database conservato nella cache.
 - `render.yaml`: blueprint Render con worker, disco persistente e segreti
   marcati `sync: false` (il valore lo chiede la dashboard, non sta nel repo).
-- `deploy/`: unit systemd `mianonnabot.service` e modello `/etc/mianonnabot.env`
-  per l'installazione su VPS.
-- `DEPLOY.md`: guida a dove mettere token e chiavi per ogni piattaforma, con i
-  limiti reali dei piani gratuiti.
+- `deploy/`: unit systemd `nonnabot.service` e modello `/etc/nonnabot.env`
+  per l'installazione su VPS, Raspberry Pi o PC.
+- `DEPLOY.md`: guida a dove mettere token e chiavi per ogni piattaforma, con una
+  tabella delle opzioni gratuite che **non richiedono carta di credito**.
 
 ### Modificato
+- **Il bot si chiama NonnaBot** (prima MiaNonnaBot): aggiornato in codice,
+  messaggio di aiuto, documentazione, database di default (`nonnabot.db`),
+  logger, unit systemd e blueprint Render.
 - Documentazione di installazione corretta: i **Background Worker di Render non
   hanno piano gratuito** e il piano gratuito di **PythonAnywhere** non basta
   (niente always-on task e allowlist in uscita che non comprende eBay).

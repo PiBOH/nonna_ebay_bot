@@ -10,7 +10,7 @@
 
 services:
   - type: worker
-    name: mianonnabot
+    name: nonnabot
     runtime: python
     plan: starter          # il piano "free" non esiste per i worker
     region: frankfurt      # più vicino all'Italia
@@ -20,7 +20,7 @@ services:
 
     # Disco persistente: senza questo il database SQLite si azzera a ogni deploy.
     disk:
-      name: mianonnabot-data
+      name: nonnabot-data
       mountPath: /data
       sizeGB: 1
 
@@ -37,7 +37,7 @@ services:
 
       # Configurazione non sensibile: valore nel file, modificabile dalla dashboard.
       - key: DATABASE_PATH
-        value: /data/mianonnabot.db
+        value: /data/nonnabot.db
       - key: CHECK_INTERVAL_MINUTES
         value: "60"
       - key: EBAY_SITE

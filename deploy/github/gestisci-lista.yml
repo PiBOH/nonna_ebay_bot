@@ -1,0 +1,85 @@
+name: Gestisci lista (manuale)
+
+# ---------------------------------------------------------------------------
+# Serve dove NON puoi tenere un processo sempre acceso (es. solo GitHub, gratis).
+# Da GitHub → Actions → "Gestisci lista (manuale)" → Run workflow scegli:
+#
+#   aggiungi  + incolla il link eBay   → mette l'oggetto sotto controllo
+#   lista                                → stampa l'elenco nel log
+#   rimuovi   + il numero dell'oggetto → lo toglie dalla lista
+#
+# Prima di usarlo configura:
+#   · Secrets  → TELEGRAM_BOT_TOKEN   (per ricevere le notifiche)
+#   · Variables → TELEGRAM_CHAT_ID    (il tuo numero di chat: te lo dice
+#                                      @userinfobot su Telegram)
+# Il database resta nella cache di GitHub Actions fra un run e l'altro.
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+    inputs:
+      azione:
+        description: "Cosa vuoi fare"
+        required: true
+        type: choice
+        options:
+          - aggiungi
+          - lista
+          - rimuovi
+      valore:
+        description: "Link eBay (per aggiungi) o numero oggetto (per rimuovi)"
+        required: false
+        default: ""
+
+concurrency:
+  group: controllo-prezzi   # stesso gruppo del cron: mai due scritture sul DB insieme
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gestisci:
+    name: Gestisci la lista
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installa le dipendenze
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ripristina il database dei tracciamenti
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: db-tracciamenti-${{ github.run_id }}
+          restore-keys: db-tracciamenti-
+
+      - name: Esegui l'azione richiesta
+        # I valori passati dall'utente viaggiano come variabili d'ambiente e mai
+        # interpolati nello script: così non c'è rischio di injection.
+        env:
+          AZIONE: ${{ inputs.azione }}
+          VALORE: ${{ inputs.valore }}
+          TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
+          DATABASE_PATH: data/nonnabot.db
+          EBAY_SITE: www.ebay.it
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+        run: |
+          mkdir -p data
+          case "$AZIONE" in
+            aggiungi) python main.py --add "$VALORE" ;;
+            lista)    python main.py --list ;;
+            rimuovi)  python main.py --remove "$VALORE" ;;
+            *) echo "Azione non riconosciuta: $AZIONE"; exit 1 ;;
+          esac
