@@ -10,6 +10,21 @@ Le versioni `0.x.y` sono di sviluppo: l'API e i comandi possono cambiare senza p
 ## [Unreleased]
 
 ### Aggiunto
+- Supporto a **Hugging Face Spaces** (hosting gratuito senza carta di credito):
+  `Dockerfile`, flag `--with-health-endpoint` che apre una porta HTTP di salute
+  (gli Space Docker devono rispondere su `app_port`, un bot in polling no),
+  e `deploy/huggingface/` con il `README.md` dello Space e la guida passo passo.
+- Salvataggio del database su un repo *dataset* di Hugging Face
+  (`HF_BACKUP_REPO`, `HF_TOKEN`): il ripristino avviene all'avvio e il
+  salvataggio dopo ogni modifica e a ogni giro del worker, con anti-rimbalzo.
+  Serve perché gli Space Docker perdono il disco a ogni riavvio.
+- Workflow `keep-alive.yml`: risveglia lo Space ogni 6 ore (dopo 48 h senza
+  visite si addormenta).
+- Dipendenza `huggingface_hub` per il backup sull'Hub.
+- Script di avvio `avvia.sh` (Linux/macOS) e `avvia.bat` (Windows): creano
+  l'ambiente virtuale, installano le dipendenze, generano `.env` e avviano il
+  bot. Controllano la versione di Python e che il token sia stato compilato,
+  con messaggi in italiano.
 - Comandi da riga di comando `--add <link>`, `--list`, `--remove <num>` e
   `--chat-id`: permettono di gestire la lista anche dove non si può tenere un
   processo sempre acceso (GitHub Actions, cron, script).
@@ -34,6 +49,12 @@ Le versioni `0.x.y` sono di sviluppo: l'API e i comandi possono cambiare senza p
   per l'installazione su VPS, Raspberry Pi o PC.
 - `DEPLOY.md`: guida a dove mettere token e chiavi per ogni piattaforma, con una
   tabella delle opzioni gratuite che **non richiedono carta di credito**.
+
+### Corretto
+- All'avvio il bot **non butta più via i messaggi arrivati mentre era spento**
+  (`drop_pending_updates` era `True`): ora li recupera e li esegue, quindi il
+  link incollato a PC spento viene aggiunto all'accensione. Il comportamento
+  vecchio resta disponibile con `DROP_PENDING_UPDATES=1`.
 
 ### Modificato
 - **Il bot si chiama NonnaBot** (prima MiaNonnaBot): aggiornato in codice,

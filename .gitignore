@@ -5,30 +5,25 @@ __pycache__/
 .venv/
 venv/
 env/
-
 # Segreti: mai nel repository
 .env
 .env.*
 !.env.example
-
 # Database del bot (SQLite + file di journal WAL)
 *.db
 *.db-wal
 *.db-shm
 *.sqlite3
-
 # Test e strumenti
 .pytest_cache/
 .coverage
 htmlcov/
 .mypy_cache/
 .ruff_cache/
-
 # Sistema / editor
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
-
 # Log
 *.log

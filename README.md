@@ -48,20 +48,40 @@ solo i comandi e i messaggi che lo menzionano (impostazione di @BotFather).
 
 ---
 
-## Installazione in locale
+## Installazione in locale (il modo più semplice per averlo su Telegram)
+
+Scarica il repository e fai **doppio clic** sullo script della tua piattaforma:
+
+| Sistema | File | Come |
+| --- | --- | --- |
+| Windows | `avvia.bat` | doppio clic |
+| Linux / macOS | `avvia.sh` | `bash avvia.sh` nel terminale |
+
+Lo script crea l'ambiente, installa le dipendenze e prepara il file `.env`.
+Al **primo giro** si ferma e ti chiede una cosa sola:
+
+1. apri `.env` col Blocco note (o un editor qualsiasi);
+2. incolla il token dopo `TELEGRAM_BOT_TOKEN=` — te lo dà
+   [@BotFather](https://t.me/BotFather) con `/newbot`;
+3. rilancia lo script.
+
+Da quel momento la finestra resta aperta e **il bot risponde su Telegram**.
+Chiudi la finestra (o `Ctrl+C`) e il bot si ferma: quando vuoi usarlo, riaprila.
+
+> Serve Python **3.10 o superiore** ([python.org](https://www.python.org/downloads/);
+> su Windows spunta *Add Python to PATH* durante l'installazione).
+
+### A mano, se preferisci
 
 ```bash
 git clone https://github.com/PiBOH/nonna_ebay_bot.git
 cd nonna_ebay_bot
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-export TELEGRAM_BOT_TOKEN="123456789:IL-TUO-TOKEN"
+cp .env.example .env          # poi incolla il token dentro .env
 python main.py
 ```
-
-Python **3.10 o superiore**. Il token si ottiene da [@BotFather](https://t.me/BotFather)
-con `/newbot`.
 
 ### Configurazione
 
@@ -112,13 +132,13 @@ escluse dai controlli successivi.
 | --- | --- | --- | --- | --- |
 | **GitHub Actions** ⭐ | gratis | ❌ | ❌ solo notifiche | la lista si gestisce col pulsante *Run workflow* |
 | **Il tuo PC / Raspberry Pi** | gratis | ❌ | ✅ | il bot completo, ma la macchina deve restare accesa |
-| Hugging Face Space | gratis | ❌ | ✅ | si addormenta dopo 48 h, disco non persistente |
+| **Hugging Face Space** ⭐ | gratis | ❌ | ✅ | sempre acceso, senza tenere il PC acceso: guida in [`deploy/huggingface/`](deploy/huggingface/ISTRUZIONI.md) |
 | **Render** Background Worker | 7 $/mese | ✅ | ✅ | i worker **non** hanno piano gratuito |
 | **PythonAnywhere** Developer | 10 $/mese | ✅ | ✅ | il piano gratuito non basta (vedi sotto) |
 
-> **Senza soldi e senza carta:** GitHub Actions per le notifiche, oppure il tuo
-> PC/Raspberry Pi per il bot completo. Oracle Cloud e Fly.io chiedono la carta
-> anche per i piani gratuiti.
+> **Senza soldi e senza carta:** Hugging Face Space per il bot completo sempre
+> acceso, il tuo PC se preferisci, GitHub Actions se ti bastano le notifiche.
+> Oracle Cloud e Fly.io chiedono la carta anche per i piani gratuiti.
 
 ### GitHub (consigliato se parti da zero)
 
